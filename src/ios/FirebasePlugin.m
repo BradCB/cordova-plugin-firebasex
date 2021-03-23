@@ -73,7 +73,7 @@ static NSMutableDictionary* firestoreListeners;
         if([self getGooglePlistFlagWithDefaultValue:FIREBASE_PERFORMANCE_COLLECTION_ENABLED defaultValue:YES]){
             [self setPreferenceFlag:FIREBASE_PERFORMANCE_COLLECTION_ENABLED flag:YES];
         }
-
+        
         // Set actionable categories if pn-actions.json exist in bundle
         [self setActionableNotifications];
 
@@ -84,7 +84,6 @@ static NSMutableDictionary* firestoreListeners;
 
         authCredentials = [[NSMutableDictionary alloc] init];
         firestoreListeners = [[NSMutableDictionary alloc] init];
-        self.traces = [NSMutableDictionary new];
     }@catch (NSException *exception) {
         [self handlePluginExceptionWithoutContext:exception];
     }
@@ -112,7 +111,7 @@ static NSMutableDictionary* firestoreListeners;
                 NSString *actionId = [action objectForKey:@"id"];
                 NSString *actionTitle = [action objectForKey:@"title"];
                 UNNotificationActionOptions options = UNNotificationActionOptionNone;
-
+                
                 id mode = [action objectForKey:@"foreground"];
                 if (mode != nil && (([mode isKindOfClass:[NSString class]] && [mode isEqualToString:@"true"]) || [mode boolValue])) {
                     options |= UNNotificationActionOptionForeground;
@@ -121,7 +120,7 @@ static NSMutableDictionary* firestoreListeners;
                 if (destructive != nil && (([destructive isKindOfClass:[NSString class]] && [destructive isEqualToString:@"true"]) || [destructive boolValue])) {
                     options |= UNNotificationActionOptionDestructive;
                 }
-
+                
                 [buttons addObject:[UNNotificationAction actionWithIdentifier:actionId
                     title:NSLocalizedString(actionTitle, nil) options:options]];
             }
@@ -302,7 +301,7 @@ static NSMutableDictionary* firestoreListeners;
                                 [self registerForRemoteNotifications];
                             }
                             [self handleBoolResultWithPotentialError:error command:command result:granted];
-
+                            
                         }@catch (NSException *exception) {
                             [self handlePluginExceptionWithContext:exception :command];
                         }
@@ -598,7 +597,7 @@ static NSMutableDictionary* firestoreListeners;
         NSString* password = [command.arguments objectAtIndex:1];
         FIRAuthCredential* authCredential = [FIREmailAuthProvider credentialWithEmail:email password:password];
         NSNumber* key = [self saveAuthCredential:authCredential];
-
+        
         NSMutableDictionary* result = [[NSMutableDictionary alloc] init];
         [result setValue:@"true" forKey:@"instantVerification"];
         [result setValue:key forKey:@"id"];
@@ -803,13 +802,9 @@ static NSMutableDictionary* firestoreListeners;
     [userInfo setValue:user.uid forKey:@"uid"];
     [userInfo setValue:@(user.isAnonymous ? true : false) forKey:@"isAnonymous"];
     [user getIDTokenWithCompletion:^(NSString * _Nullable token, NSError * _Nullable error) {
-        if(error == nil){
-            [userInfo setValue:token forKey:@"idToken"];
-        }
+        [userInfo setValue:token forKey:@"idToken"];
         [user getIDTokenResultWithCompletion:^(FIRAuthTokenResult * _Nullable tokenResult, NSError * _Nullable error) {
-            if(error == nil){
-                [userInfo setValue:tokenResult.signInProvider forKey:@"providerId"];
-            }
+            [userInfo setValue:tokenResult.signInProvider forKey:@"providerId"];
             [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:userInfo] callbackId:command.callbackId];
         }];
     }];
@@ -1146,13 +1141,12 @@ static NSMutableDictionary* firestoreListeners;
 
 - (void)logError:(CDVInvokedUrlCommand *)command {
     [self.commandDelegate runInBackground:^{
+        NSString* errorMessage = [command.arguments objectAtIndex:0];
+
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         @try {
-            NSString* errorMessage = [command.arguments objectAtIndex:0];
-            CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
             if(![self isCrashlyticsEnabled]){
                 pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Cannot log error - Crashlytics collection is disabled"];
-            }else if([command.arguments objectAtIndex:0] == [NSNull null]){
-                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Cannot log error - error message is empty"];
             }
             // We can optionally be passed a stack trace from stackTrace.js which we'll put in userInfo.
             else if ([command.arguments count] > 1) {
@@ -1245,19 +1239,19 @@ static NSMutableDictionary* firestoreListeners;
     [self.commandDelegate runInBackground:^{
         @try {
             FIRRemoteConfig* remoteConfig = [FIRRemoteConfig remoteConfig];
-
+            
             FIRRemoteConfigSettings* settings = [[FIRRemoteConfigSettings alloc] init];
-
+            
             if([command.arguments objectAtIndex:0] != [NSNull null]){
                 settings.fetchTimeout = [[command.arguments objectAtIndex:0] longValue];
             }
-
+            
             if([command.arguments objectAtIndex:1] != [NSNull null]){
                 settings.minimumFetchInterval = [[command.arguments objectAtIndex:1] longValue];
             }
-
+            
             remoteConfig.configSettings = settings;
-
+            
             [self sendPluginSuccess:command];
         }@catch (NSException *exception) {
             [self handlePluginExceptionWithContext:exception :command];
@@ -1347,22 +1341,13 @@ static NSMutableDictionary* firestoreListeners;
     [self.commandDelegate runInBackground:^{
         @try {
             FIRRemoteConfig* remoteConfig = [FIRRemoteConfig remoteConfig];
-            NSArray* defaultKeys = [remoteConfig allKeysFromSource:FIRRemoteConfigSourceDefault];
-            NSArray* remoteKeys = [remoteConfig allKeysFromSource:FIRRemoteConfigSourceRemote];
-            NSArray* staticKeys = [remoteConfig allKeysFromSource:FIRRemoteConfigSourceStatic];
-            NSArray* keys = defaultKeys;
-            if([keys count] == 0){
-                keys = remoteKeys;
-            }
-            if([keys count] == 0){
-                keys = staticKeys;
-            }
+            NSArray* keys = [remoteConfig allKeysFromSource:FIRRemoteConfigSourceDefault];
             NSMutableDictionary* result = [[NSMutableDictionary alloc] init];
-
+            
             for (NSString* key in keys) {
                 [result setObject:remoteConfig[key].stringValue forKey:key];
             }
-
+    
             CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
             [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         }@catch (NSException *exception) {
@@ -1394,8 +1379,11 @@ static NSMutableDictionary* firestoreListeners;
             NSInteger fetchTimeout = remoteConfig.configSettings.fetchTimeout;
             NSDate* lastFetchTime = remoteConfig.lastFetchTime;
             FIRRemoteConfigFetchStatus lastFetchStatus = remoteConfig.lastFetchStatus;
+            // isDeveloperModeEnabled is deprecated new recommnded way to check is minimumFetchInterval == 0
+            BOOL isDeveloperModeEnabled = minimumFetchInterval == 0 ? true : false;
 
             NSDictionary* configSettings = @{
+                @"developerModeEnabled": [NSNumber numberWithBool:isDeveloperModeEnabled],
                 @"minimumFetchInterval": [NSNumber numberWithInteger:minimumFetchInterval],
                 @"fetchTimeout": [NSNumber numberWithInteger:fetchTimeout],
             };
@@ -1449,11 +1437,16 @@ static NSMutableDictionary* firestoreListeners;
     [self.commandDelegate runInBackground:^{
         @try {
             NSString* traceName = [command.arguments objectAtIndex:0];
-            FIRTrace* trace = [self.traces objectForKey:traceName];
+            FIRTrace *trace = [self.traces objectForKey:traceName];
+
+            if ( self.traces == nil) {
+                self.traces = [NSMutableDictionary new];
+            }
 
             if (trace == nil) {
                 trace = [FIRPerformance startTraceWithName:traceName];
                 [self.traces setObject:trace forKey:traceName ];
+
             }
 
             CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -1656,7 +1649,7 @@ static NSMutableDictionary* firestoreListeners;
                     [self handlePluginExceptionWithContext:exception :command];
                 }
             }];
-
+            
             NSMutableDictionary* jsResult = [[NSMutableDictionary alloc] init];;
             [jsResult setObject:@"id" forKey:@"eventType"];
             NSNumber* key = [self saveFirestoreListener:listener];
@@ -1676,12 +1669,12 @@ static NSMutableDictionary* firestoreListeners;
             if([command.arguments objectAtIndex:1] != [NSNull null]){
                 filters = [command.arguments objectAtIndex:1];
             }
-
+            
             FIRQuery* query = [firestore collectionWithPath:collection];
             if(filters != nil){
                 query = [self applyFiltersToFirestoreCollectionQuery:filters query:query];
             }
-
+            
             [query getDocumentsWithCompletion:^(FIRQuerySnapshot * _Nullable snapshot, NSError * _Nullable error) {
                 if (error != nil) {
                     [self sendPluginErrorWithMessage:error.localizedDescription:command];
@@ -1708,12 +1701,12 @@ static NSMutableDictionary* firestoreListeners;
                 filters = [command.arguments objectAtIndex:1];
             }
             bool includeMetadata = [command.arguments objectAtIndex:2];
-
+            
             FIRQuery* query = [firestore collectionWithPath:collection];
             if(filters != nil){
                 query = [self applyFiltersToFirestoreCollectionQuery:filters query:query];
             }
-
+            
             id<FIRListenerRegistration> listener = [query
                 addSnapshotListenerWithIncludeMetadataChanges:includeMetadata
                 listener:^(FIRQuerySnapshot *snapshot, NSError *error) {
@@ -1721,7 +1714,7 @@ static NSMutableDictionary* firestoreListeners;
                         if(snapshot != nil){
                             NSMutableDictionary* jsResult = [[NSMutableDictionary alloc] init];
                             [jsResult setObject:@"change" forKey:@"eventType"];
-
+                            
                             NSMutableDictionary* documents = [[NSMutableDictionary alloc] init];
                             bool hasDocuments = false;
                             for (FIRDocumentChange* dc in snapshot.documentChanges) {
@@ -1815,12 +1808,12 @@ static NSMutableDictionary* firestoreListeners;
 
 - (id) getFilterValueAsType: (NSArray*)filter  valueIndex:(int)valueIndex typeIndex:(int)typeIndex{
     id typedValue = [filter objectAtIndex:valueIndex];
-
+    
     NSString* type = @"string";
     if([filter objectAtIndex:typeIndex] != nil){
         type = [filter objectAtIndex:typeIndex];
     }
-
+    
     if([type isEqual:@"boolean"]){
         if([typedValue isKindOfClass:[NSNumber class]]){
             typedValue = [NSNumber numberWithBool:typedValue];
@@ -1848,7 +1841,7 @@ static NSMutableDictionary* firestoreListeners;
             }
         }
     }
-
+    
     return typedValue;
 }
 
@@ -1861,12 +1854,10 @@ static NSMutableDictionary* firestoreListeners;
 }
 
 - (NSNumber*) saveFirestoreListener: (id<FIRListenerRegistration>) firestoreListener {
-    @synchronized (firestoreListeners) {
-        int id = [self generateId];
-        NSNumber* key = [NSNumber numberWithInt:id];
-        [firestoreListeners setObject:firestoreListener forKey:key];
-        return key;
-    }
+    int id = [self generateId];
+    NSNumber* key = [NSNumber numberWithInt:id];
+    [firestoreListeners setObject:firestoreListener forKey:key];
+    return key;
 }
 
 - (void) removeFirestoreListener:(CDVInvokedUrlCommand*)command {
@@ -1886,16 +1877,14 @@ static NSMutableDictionary* firestoreListeners;
 }
 
 - (bool) _removeFirestoreListener: (NSNumber*) key {
-    @synchronized (firestoreListeners) {
-        bool removed = false;
-        if([firestoreListeners objectForKey:key] != nil){
-            id<FIRListenerRegistration> firestoreListener = [firestoreListeners objectForKey:key];
-            [firestoreListener remove];
-            [firestoreListeners removeObjectForKey:key];
-            removed = true;
-        }
-        return removed;
+    bool removed = false;
+    if([firestoreListeners objectForKey:key] != nil){
+        id<FIRListenerRegistration> firestoreListener = [firestoreListeners objectForKey:key];
+        [firestoreListener remove];
+        [firestoreListeners removeObjectForKey:key];
+        removed = true;
     }
+    return removed;
 }
 
 /********************************/
