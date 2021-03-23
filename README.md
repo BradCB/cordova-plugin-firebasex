@@ -192,6 +192,8 @@ To help ensure this plugin is kept updated, new features are added and bugfixes 
     - [listenToDocumentInFirestoreCollection](#listentodocumentinfirestorecollection)
     - [listenToFirestoreCollection](#listentofirestorecollection)
     - [removeFirestoreListener](#removefirestorelistener)
+  - [Functions](#functions)
+    - [functionsHttpsCallable](#functionshttpscallable)
 - [Credits](#credits)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -470,7 +472,7 @@ Therefore if you need to change the specified versions, you'll currently need to
 ### Cocoapods
 This plugin relies on `cordova@9`/`cordova-ios@5` support for the [CocoaPods dependency manager]( https://cocoapods.org/) in order to satisfy the iOS Firebase SDK library dependencies.
 
-Therefore please make sure you have `cocoapods@>=1.9` installed in your iOS build environment - setup instructions can be found [here](https://cocoapods.org/).
+Please make sure you have `cocoapods@>=1.10` installed in your iOS build environment - setup instructions can be found [here](https://cocoapods.org/).
 
 If building your project in Xcode, you need to open `YourProject.xcworkspace` (not `YourProject.xcodeproj`) so both your Cordova app project and the Pods project will be loaded into Xcode.
 
@@ -3454,6 +3456,32 @@ For example:
   "eventType": "id",
   "id": 12345
 }
+```
+
+## Functions
+(Android only)
+
+### functionsHttpsCallable
+Call a firebase [Https Callable function](https://firebase.google.com/docs/functions/callable)
+
+**Parameters**:
+- {string} name - the name of the function
+- {object} args - arguments to send to the function
+- {function} success - callback function to call on successfully completed the function call.
+Will be passed an {object/array/string} containing the data returned by the function
+- {function} error - callback function which will be passed a {string/object} error message as an argument.
+
+```javascript
+var functionName = "myBackendFunction";
+var args = {
+    arg1: 'First argument',
+    arg2: 'second argument'
+};
+FirebasePlugin.functionsHttpsCallable(functionName, args, function(result){
+    console.log("Successfully called function: "+JSON.stringify(result));
+}, function(error){
+    console.error("Error calling function: "+JSON.stringify(error));
+});
 ```
 
 This can be used to subsequently remove the listener using this function.
