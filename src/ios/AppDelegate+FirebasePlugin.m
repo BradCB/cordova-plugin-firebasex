@@ -26,7 +26,6 @@ static id <UNUserNotificationCenterDelegate> _previousDelegate;
 static NSDictionary* mutableUserInfo;
 static FIRAuthStateDidChangeListenerHandle authStateChangeListener;
 static bool authStateChangeListenerInitialized = false;
-static bool shouldEstablishDirectChannel = false;
 
 + (void)load {
     Method original = class_getInstanceMethod(self, @selector(application:didFinishLaunchingWithOptions:));
@@ -44,10 +43,10 @@ static bool shouldEstablishDirectChannel = false;
 
 - (BOOL)application:(UIApplication *)application swizzledDidFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     [self application:application swizzledDidFinishLaunchingWithOptions:launchOptions];
-    
+   
     @try{
         instance = self;
-        
+     
         bool isFirebaseInitializedWithPlist = false;
         if(![FIRApp defaultApp]) {
             // get GoogleService-Info.plist file path
@@ -73,14 +72,15 @@ static bool shouldEstablishDirectChannel = false;
             // Assume that another call (probably from another plugin) did so with the plist
             isFirebaseInitializedWithPlist = true;
         }
-        
-      
-        
-        shouldEstablishDirectChannel = [[[NSBundle mainBundle] objectForInfoDictionaryKey:@"shouldEstablishDirectChannel"] boolValue];
+    
+        // Set UNUserNotificationCenter delegate
+        if ([UNUserNotificationCenter currentNotificationCenter].delegate != nil) {
+            _previousDelegate = [UNUserNotificationCenter currentNotificationCenter].delegate;
+        }
+        [UNUserNotificationCenter currentNotificationCenter].delegate = self;
 
         // Set FCM messaging delegate
         [FIRMessaging messaging].delegate = self;
-        [FIRMessaging messaging].shouldEstablishDirectChannel = shouldEstablishDirectChannel;
         
         // Setup Firestore
         [FirebasePlugin setFirestore:[FIRFirestore firestore]];
@@ -101,12 +101,9 @@ static bool shouldEstablishDirectChannel = false;
             }
         }];
 
-        // Set NSNotificationCenter observer
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(tokenRefreshNotification:)
-                                                     name:kFIRInstanceIDTokenRefreshNotification object:nil];
 
         self.applicationInBackground = @(YES);
-        
+       
     }@catch (NSException *exception) {
         [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
     }
@@ -116,14 +113,12 @@ static bool shouldEstablishDirectChannel = false;
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
     self.applicationInBackground = @(NO);
-    [FIRMessaging messaging].shouldEstablishDirectChannel = shouldEstablishDirectChannel;
-    [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"Enter foreground: FCM direct channel = %@", shouldEstablishDirectChannel ? @"true" : @"false"]];
+    [FirebasePlugin.firebasePlugin _logMessage:@"Enter foreground"];
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     self.applicationInBackground = @(YES);
-    [FIRMessaging messaging].shouldEstablishDirectChannel = false;
-    [FirebasePlugin.firebasePlugin _logMessage:@"Enter background: FCM direct channel = false"];
+    [FirebasePlugin.firebasePlugin _logMessage:@"Enter background"];
 }
 
 # pragma mark - Google SignIn
@@ -167,33 +162,9 @@ didDisconnectWithUser:(GIDGoogleUser *)user
 
 # pragma mark - FIRMessagingDelegate
 - (void)messaging:(FIRMessaging *)messaging didReceiveRegistrationToken:(NSString *)fcmToken {
-    [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"didReceiveRegistrationToken: %@", fcmToken]];
     @try{
+        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"didReceiveRegistrationToken: %@", fcmToken]];
         [FirebasePlugin.firebasePlugin sendToken:fcmToken];
-    }@catch (NSException *exception) {
-        [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
-    }
-}
-
-- (void)tokenRefreshNotification:(NSNotification *)notification {
-    // Note that this callback will be fired everytime a new token is generated, including the first
-    // time. So if you need to retrieve the token as soon as it is available this is where that
-    // should be done.
-    @try{
-        [[FIRInstanceID instanceID] instanceIDWithHandler:^(FIRInstanceIDResult * _Nullable result,
-                                                            NSError * _Nullable error) {
-            @try{
-                if (error == nil) {
-                    NSString *refreshedToken = result.token;
-                    [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"tokenRefreshNotification: %@", refreshedToken]];
-                    [FirebasePlugin.firebasePlugin sendToken:refreshedToken];
-                }else{
-                    [FirebasePlugin.firebasePlugin _logError:[NSString stringWithFormat:@"tokenRefreshNotification: %@", error.description]];
-                }
-            }@catch (NSException *exception) {
-                [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
-            }
-        }];
     }@catch (NSException *exception) {
         [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
     }
@@ -203,29 +174,67 @@ didDisconnectWithUser:(GIDGoogleUser *)user
     [FIRMessaging messaging].APNSToken = deviceToken;
     [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"didRegisterForRemoteNotificationsWithDeviceToken: %@", deviceToken]];
     [FirebasePlugin.firebasePlugin sendApnsToken:[FirebasePlugin.firebasePlugin hexadecimalStringFromData:deviceToken]];
-      if ([UNUserNotificationCenter currentNotificationCenter].delegate != nil) {
-        _previousDelegate = [UNUserNotificationCenter currentNotificationCenter].delegate;
-    }
-    // Set UNUserNotificationCenter delegate
-    [UNUserNotificationCenter currentNotificationCenter].delegate = self;
 }
+- (void)logRemoteMessage:(NSString*)customerId :(NSString*)message :(NSString*)url :(NSString*)auditLogId
+{
 
+        NSString *post = [NSString stringWithFormat:@"customerId=%@&message=%@&isIos=true&AuditLogId=%@", customerId, message, auditLogId];
+        NSData *postData = [post dataUsingEncoding:NSASCIIStringEncoding allowLossyConversion:YES];
+        NSString *postLength = [NSString stringWithFormat:@"%lu", (unsigned long)[postData length]];
+        NSString *urlForHttp = [NSString stringWithFormat:@"%@",url];
+         NSMutableURLRequest *request = [[NSMutableURLRequest alloc] init];
+         [request setURL:[NSURL URLWithString:urlForHttp]];
+         [request setHTTPMethod:@"POST"];
+         [request setValue:postLength forHTTPHeaderField:@"Content-Length"];
+         [request setHTTPBody:postData];
+         
+         NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+         [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+             NSString *requestReply = [[NSString alloc] initWithData:data encoding:NSASCIIStringEncoding];
+             NSLog(@"Request reply: %@", requestReply);
+             if([requestReply length] == 0)
+             {
+                 NSMutableDictionary* userInfo = [[NSMutableDictionary alloc] init];
+                 NSString *errorString = [NSString stringWithFormat:@"Error in logRemoteMessage, customerId: %@, message: %@, auditLogId: %@", customerId, message, auditLogId];
+                 NSError *error = [NSError errorWithDomain:errorString  code:0 userInfo:userInfo];
+                 [[FIRCrashlytics crashlytics] recordError:error];
+             }
+         }] resume];
+ 
+}
 //Tells the app that a remote notification arrived that indicates there is data to be fetched.
 // Called when a message arrives in the foreground and remote notifications permission has been granted
 - (void)application:(UIApplication *)application didReceiveRemoteNotification:(NSDictionary *)userInfo
-    fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler {
-
+    fetchCompletionHandler:(void (^)(UIBackgroundFetchResult result))completionHandler {
+  
     @try{
+        //[self logRemoteMessage:@"488919":@"Test background Notification":@"https://dmsweb.conveyor.cloud/api/settings/CreateRemoteMessageRecivedLog":@"123"];
+     
         [[FIRMessaging messaging] appDidReceiveMessage:userInfo];
         mutableUserInfo = [userInfo mutableCopy];
         NSDictionary* aps = [mutableUserInfo objectForKey:@"aps"];
+        // Remote notification variables for a silent cutoff date update
+        NSString* newCutoffDate1 = [mutableUserInfo objectForKey:@"newCutoffDate1"];
+        NSString* newCutoffDate2 = [mutableUserInfo objectForKey:@"newCutoffDate2"];
+        
+        NSString* customerId = [mutableUserInfo objectForKey:@"CustomerID"];
+        NSString* serverTimeZone = [mutableUserInfo objectForKey:@"serverTimeZone"];
+        NSString* messageBody = [mutableUserInfo objectForKey:@"body"];
+        NSString* websiteUrl = [mutableUserInfo objectForKey:@"websiteUrl"];
+        NSString* auditLogId = [mutableUserInfo objectForKey:@"AuditLogId"];
+        if(newCutoffDate1 == nil){
+          
+            [self logRemoteMessage:customerId:messageBody:websiteUrl:auditLogId];
+        }
         bool isContentAvailable = false;
         if([aps objectForKey:@"alert"] != nil){
-           @try{
-               isContentAvailable = [[aps objectForKey:@"content-available"] isEqualToNumber:[NSNumber numberWithInt:1]];
-            }@catch (NSException *exception) {
-               
-            }
+            @try
+                 {
+                     isContentAvailable = [[aps objectForKey:@"content-available"] isEqualToNumber:[NSNumber numberWithInt:1]];
+                 }
+                 @catch(id anException) {
+                    // ignore
+                 }
             [mutableUserInfo setValue:@"notification" forKey:@"messageType"];
             NSString* tap;
             if([self.applicationInBackground isEqual:[NSNumber numberWithBool:YES]] && !isContentAvailable){
@@ -235,8 +244,193 @@ didDisconnectWithUser:(GIDGoogleUser *)user
         }else{
             [mutableUserInfo setValue:@"data" forKey:@"messageType"];
         }
+        if(newCutoffDate1 != nil && customerId != nil){
+            
+            NSDateFormatter *dateFormatter = [NSDateFormatter new];
+            [dateFormatter setTimeZone:[NSTimeZone timeZoneWithAbbreviation:@"UTC"]];
+            [dateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
+            NSTimeZone *timeZone = [NSTimeZone timeZoneWithName: serverTimeZone];
+            [dateFormatter setTimeZone:timeZone];
+            
+            // Next cutoff date and the after that to incase the first date is already passed when set to the frequencyNumber
+            NSDate* newCutoffUpdateDate1 = [dateFormatter dateFromString:newCutoffDate1];
+            newCutoffDate1 = [dateFormatter stringFromDate: newCutoffUpdateDate1];
+            NSDate* newCutoffUpdateDate2 = [dateFormatter dateFromString:newCutoffDate2];
+            newCutoffDate2 = [dateFormatter stringFromDate: newCutoffUpdateDate2];
+            
+            // Loop through the scheduled notifications on this device and match the customer id and old cutoff date to change the localnotifcation
+            [[UNUserNotificationCenter currentNotificationCenter] getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest *> *requests){
+                [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"requests: %@", requests]];
+                for (int i=0; i<[requests count]; i++)
+                {
+                    // Notification we are looking at
+                    UNNotificationRequest* scheduledNotification = [requests objectAtIndex:i];
+                    NSDictionary *userInfoCurrent = scheduledNotification.content.userInfo;
+                    mutableUserInfo = [userInfoCurrent mutableCopy];
+                    NSString* firstNotificationData =[mutableUserInfo objectForKey:@"data"];
+                    NSError *jsonError;
+                    NSData *objectData = [firstNotificationData dataUsingEncoding:NSUTF8StringEncoding];
+                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:objectData
+                                                          options:NSJSONReadingMutableContainers
+                                                            error:&jsonError];
+                    
+                    NSString* SHCutOffDateStr =[json objectForKey:@"cutOffDate"]; // old date we are looking to match frequencyNumber
+                    [dateFormatter setTimeZone:[NSTimeZone timeZoneWithAbbreviation:@"UTC"]];
+                    [dateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
+                    NSTimeZone *timeZone = [NSTimeZone timeZoneWithName: serverTimeZone];
+                    [dateFormatter setTimeZone:timeZone];
+                    NSDate* SHCutOffDate = [dateFormatter dateFromString:SHCutOffDateStr];
+                    SHCutOffDateStr = [dateFormatter stringFromDate: SHCutOffDate];
+                    // Scheduled notification variables
+                    NSNumber *SHFrequencyNumber  =[json objectForKey:@"frequencyNumber"];
+                    NSString* SHFrequencyName  =[json objectForKey:@"frequencyName"];
+                    NSString* SHCustomerId  =[json objectForKey:@"customerId"];
+                    NSNumber* SHOrderNumber  =[json objectForKey:@"orderNumber"];
+                    NSString* SHNotificationDate  =[json objectForKey:@"notificationDate"];
+                    NSString* SHNotificationLocalStorageKey  =[json objectForKey:@"notificationLocalStorageKey"];
+                    NSString* SHNotificationTimeZoneKey  =[json objectForKey:@"serverTimeZone"];
+                  
+                    // For now, we are dealing with a single recurring local notification update so we only need to check if this notifications customer id matches the push notifications customer id
+                    if ([SHCustomerId isEqualToString:customerId] && ![newCutoffDate1 isEqualToString:SHCutOffDateStr])
+                    {
+                       
+                        int scheduledNotificationId = [scheduledNotification.identifier intValue]; // id we are looking to match
+                      
+                        __block NSDate *newCutoffDate = nil;
+                        __block NSDate *newFireDate = nil;
+                        // Build new cutoff notification
+                        // Calculate new fire date with with SH frequency Number and newCutoffDate
 
+                        NSDate *newFireDate1 = [newCutoffUpdateDate1 dateByAddingTimeInterval:-3600*SHFrequencyNumber.intValue];
+                        NSDate *newFireDate2 = [newCutoffUpdateDate2 dateByAddingTimeInterval:-3600*SHFrequencyNumber.intValue];
+                        NSDate *now = [NSDate date];
+                      
+                        if ([now compare:newFireDate1] == NSOrderedAscending) {
+                            newFireDate = newFireDate1;
+                            newCutoffDate = newCutoffUpdateDate1;
+                        }else
+                        {
+                            newFireDate = newFireDate2;
+                            newCutoffDate = newCutoffUpdateDate2;
+                            
+                        }
+                        // testing
+                       // newFireDate = [now dateByAddingTimeInterval:60];
+                       // newCutoffDate = [now dateByAddingTimeInterval:86520];
+                        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"Setting new fire date: %@", newFireDate]];
+                        UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+                        content.title = @"Delivery Change Cut-Off";
+                        
+                        NSString* NewNotificationText = @"As of ";
+                        NSString* NewNotificationHourText = @"hours";
+                        if([SHFrequencyNumber intValue] == 1)
+                        {
+                            NewNotificationHourText =@"hour";
+                        }
+                    
+                        [dateFormatter setDateFormat:@"MM-dd h:mm a"];
+                        NSTimeZone *timeZone = [NSTimeZone timeZoneWithName: serverTimeZone];
+                        [dateFormatter setTimeZone:timeZone];
+                        NSString* NewNotificationTimeStamp = [dateFormatter stringFromDate: newFireDate];
+                        
+                        NewNotificationText = [NewNotificationText stringByAppendingString:NewNotificationTimeStamp];
+                       NewNotificationText = [NewNotificationText stringByAppendingString:@", the cut-off time to change your next delivery is "];
+                       NewNotificationText = [NewNotificationText stringByAppendingString:[NSString stringWithFormat:@"%@",SHFrequencyNumber]];
+                       NewNotificationText = [NewNotificationText stringByAppendingString:@" "];
+                       NewNotificationText = [NewNotificationText stringByAppendingString:NewNotificationHourText];
+                       NewNotificationText = [NewNotificationText stringByAppendingString:@" away, on "];
+                        
+                        [dateFormatter setDateFormat:@"MM-dd"];
+                        NSString* NewNotificationCutoffDateStr1 = [dateFormatter stringFromDate: newCutoffDate];
+                        NewNotificationText = [NewNotificationText stringByAppendingString:NewNotificationCutoffDateStr1];
+                        NewNotificationText = [NewNotificationText stringByAppendingString:@" at "];
+                        
+                        [dateFormatter setDateFormat:@"h:mm a"];
+                        NSString* NewNotificationCutoffDateStr2 = [dateFormatter stringFromDate:newCutoffDate];
+                        NewNotificationText = [NewNotificationText stringByAppendingString:NewNotificationCutoffDateStr2];
+                        content.body = NewNotificationText;
+                     
+                        NSMutableDictionary *newNotification = [[NSMutableDictionary alloc]init]; // this is the first layer of the notification that is being used in local notifications plugin
+                        NSMutableDictionary *newNotificationData = [[NSMutableDictionary alloc]init]; // data layer
+                        NSMutableDictionary *newNotificationTriggerType = [[NSMutableDictionary alloc]init]; // trigger layer
+                        // Set json data for local notification
+            
+                        [dateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
+                        [dateFormatter setTimeZone:timeZone];
+                        NSString* NewNotificationCutoffStr = [dateFormatter stringFromDate: now];
+                        //Set Notification Data
+                        [newNotificationData setValue:NewNotificationCutoffStr forKey:@"cutOffDate"];
+                        // Data that stays the same
+                        [newNotificationData setValue:SHCustomerId forKey:@"customerId"];
+                        [newNotificationData setValue:SHFrequencyNumber forKey:@"frequencyNumber"];
+                        [newNotificationData setValue:SHFrequencyName forKey:@"frequencyName"];
+                        [newNotificationData setValue:SHOrderNumber forKey:@"orderNumber"];
+                        [newNotificationData setValue:SHNotificationLocalStorageKey forKey:@"notificationLocalStorageKey"];
+                        
+                        [dateFormatter setTimeZone:[NSTimeZone timeZoneWithAbbreviation:@"UTC"]];
+                        [dateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
+                        NSString* newFireDateStr = [dateFormatter stringFromDate: SHCutOffDate];
+                        [newNotificationData setValue:newFireDateStr forKey:@"notificationDate"];
+                        
+                        [newNotificationData setValue:SHNotificationTimeZoneKey forKey:@"serverTimeZone"];
+                        [newNotificationData setValue:@"Cutoff" forKey:@"title"];
+
+                        [newNotificationData setValue:[dateFormatter stringFromDate:[NSDate date]] forKey:@"timeStamp"];
+                        //Set Trigger Type
+                        [newNotificationTriggerType setValue:@"updateCutoffDates" forKey:@"type"];
+                        //Set first layer notification info
+                        NSError *error;
+                        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:newNotificationData // Here you can pass array or dictionary
+                                            options:NSJSONWritingPrettyPrinted
+                                            error:&error];
+                        NSString *jsonString;
+                        if (jsonData) {
+                            jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+                            [newNotification setObject:jsonString forKey:@"data"];
+                        } else {
+                            NSLog(@"Got an error: %@", error);
+                            jsonString = @"";
+                        }
+                        
+                        [newNotification setValue: [NSNumber numberWithInt:1] forKey:@"priority"]; // cordova local notification needs this set to one to show in foreground
+                       [newNotification setValue: [NSNumber numberWithInt:true] forKey:@"foreground"];
+                       [newNotification setValue: [NSNumber numberWithInt:true] forKey:@"lockscreen"];
+                        [newNotification setObject:newNotificationTriggerType forKey:@"trigger"];
+                        NSNumberFormatter *numberFormatter = [[NSNumberFormatter alloc] init];
+                        [newNotification setValue:[numberFormatter numberFromString:scheduledNotification.identifier] forKey:@"id"];
+                        [newNotification setValue: content.body forKey:@"text"];
+                        [newNotification setValue: content.title forKey:@"title"];
+                        content.userInfo = newNotification;
+                        content.sound = [UNNotificationSound defaultSound];
+                        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"Set new notification user info: %@", content.userInfo]];
+                        NSDateComponents *triggerDate = [[NSCalendar currentCalendar]
+                                                                components:NSCalendarUnitYear +
+                                                                NSCalendarUnitMonth + NSCalendarUnitDay +
+                                                                NSCalendarUnitHour + NSCalendarUnitMinute +
+                                                                NSCalendarUnitSecond fromDate:newFireDate];
+                        UNCalendarNotificationTrigger *trigger = [UNCalendarNotificationTrigger triggerWithDateMatchingComponents:triggerDate repeats:YES];
+                        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"Setting new trigger: %@", trigger]];
+                        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"Setting new triggerDate: %@", triggerDate]];
+                        UNNotificationRequest *notification = [UNNotificationRequest requestWithIdentifier:scheduledNotification.identifier content:content trigger:trigger];
+                        UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+                        //Cancelling the specific local notification
+                        [[UNUserNotificationCenter currentNotificationCenter]removePendingNotificationRequestsWithIdentifiers:@[scheduledNotification.identifier]];
+                               [center addNotificationRequest:notification withCompletionHandler:^(NSError * _Nullable error) {
+                                   if (error != nil) {
+                                       NSLog(@"Something went wrong: %@",error);
+                                   }
+                               }];
+                    }
+                }
+                
+      
+            }];
+        }
+     
         [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"didReceiveRemoteNotification: %@", mutableUserInfo]];
+        
+        UIApplication *app = [UIApplication sharedApplication];
+      
         
         completionHandler(UIBackgroundFetchResultNewData);
         if([self.applicationInBackground isEqual:[NSNumber numberWithBool:YES]] && isContentAvailable){
@@ -245,26 +439,11 @@ didDisconnectWithUser:(GIDGoogleUser *)user
             [self processMessageForForegroundNotification:mutableUserInfo];
         }
         if([self.applicationInBackground isEqual:[NSNumber numberWithBool:YES]] || !isContentAvailable){
+            
             [FirebasePlugin.firebasePlugin sendNotification:mutableUserInfo];
         }
-    }@catch (NSException *exception) {
-        [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
-    }
-}
-
-// Receive data messages on iOS 10+ directly from FCM (bypassing APNs) when the app is in the foreground.
-// Called when a data message is arrives in the foreground and remote notifications permission has been NOT been granted
-- (void)messaging:(FIRMessaging *)messaging didReceiveMessage:(FIRMessagingRemoteMessage *)remoteMessage {
-    @try{
-        [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"didReceiveMessage: %@", remoteMessage.appData]];
-        
-        NSDictionary* appData = [remoteMessage.appData mutableCopy];
-        [appData setValue:@"data" forKey:@"messageType"];
-        [self processMessageForForegroundNotification:appData];
-     
-        // This will allow us to handle FCM data-only push messages even if the permission for push
-        // notifications is yet missing. This will only work when the app is in the foreground.
-        [FirebasePlugin.firebasePlugin sendNotification:appData];
+       
+      
     }@catch (NSException *exception) {
         [FirebasePlugin.firebasePlugin handlePluginExceptionWithoutContext:exception];
     }
@@ -390,7 +569,7 @@ didDisconnectWithUser:(GIDGoogleUser *)user
     @try{
 
         if (![notification.request.trigger isKindOfClass:UNPushNotificationTrigger.class] && ![notification.request.trigger isKindOfClass:UNTimeIntervalNotificationTrigger.class]){
-           if (_previousDelegate) {
+            if (_previousDelegate) {
                 // bubbling notification
                 [_previousDelegate userNotificationCenter:center
                           willPresentNotification:notification
@@ -414,9 +593,23 @@ didDisconnectWithUser:(GIDGoogleUser *)user
         // Print full message.
         [FirebasePlugin.firebasePlugin _logMessage:[NSString stringWithFormat:@"willPresentNotification: %@", mutableUserInfo]];
 
-        
+        bool isContentAvailable = true;
         NSDictionary* aps = [mutableUserInfo objectForKey:@"aps"];
-        bool isContentAvailable = [[aps objectForKey:@"content-available"] isEqualToNumber:[NSNumber numberWithInt:1]];
+        @try {
+            isContentAvailable = [[aps objectForKey:@"content-available"] isEqualToNumber:[NSNumber numberWithInt:1]];
+        } @catch (NSException *exception) {
+            
+        }
+        NSString* newCutoffDate1 = [mutableUserInfo objectForKey:@"newCutoffDate1"];
+        NSString* customerId = [mutableUserInfo objectForKey:@"CustomerID"];
+
+        NSString* messageBody = [mutableUserInfo objectForKey:@"body"];
+        NSString* websiteUrl = [mutableUserInfo objectForKey:@"websiteUrl"];
+        NSString* auditLogId = [mutableUserInfo objectForKey:@"AuditLogId"];
+        if(newCutoffDate1 == nil){
+                 
+            [self logRemoteMessage:customerId:messageBody:websiteUrl:auditLogId];
+        }
         if(isContentAvailable){
             [FirebasePlugin.firebasePlugin _logError:@"willPresentNotification: aborting as content-available:1 so system notification will be shown"];
             return;
@@ -450,6 +643,7 @@ didDisconnectWithUser:(GIDGoogleUser *)user
         
         if(![messageType isEqualToString:@"data"]){
             [FirebasePlugin.firebasePlugin sendNotification:mutableUserInfo];
+            
         }
         
     }@catch (NSException *exception) {
@@ -466,7 +660,7 @@ didDisconnectWithUser:(GIDGoogleUser *)user
     @try{
         
         if (![response.notification.request.trigger isKindOfClass:UNPushNotificationTrigger.class] && ![response.notification.request.trigger isKindOfClass:UNTimeIntervalNotificationTrigger.class]){
-              if (_previousDelegate) {
+            if (_previousDelegate) {
                 // bubbling event
                 [_previousDelegate userNotificationCenter:center
                                didReceiveNotificationResponse:response
@@ -481,10 +675,26 @@ didDisconnectWithUser:(GIDGoogleUser *)user
         [[FIRMessaging messaging] appDidReceiveMessage:response.notification.request.content.userInfo];
         
         mutableUserInfo = [response.notification.request.content.userInfo mutableCopy];
-        
+      
         NSString* tap;
         if([self.applicationInBackground isEqual:[NSNumber numberWithBool:YES]]){
-            tap = @"background";
+            {
+                NSString* newCutoffDate1 = [mutableUserInfo objectForKey:@"newCutoffDate1"];
+     
+                
+                NSString* customerId = [mutableUserInfo objectForKey:@"CustomerID"];
+
+                NSString* messageBody = [mutableUserInfo objectForKey:@"body"];
+                NSString* websiteUrl = [mutableUserInfo objectForKey:@"websiteUrl"];
+                NSString* auditLogId = [mutableUserInfo objectForKey:@"AuditLogId"];
+                tap = @"background";
+                
+                if(newCutoffDate1 == nil){
+                         
+                    [self logRemoteMessage:customerId:messageBody:websiteUrl:auditLogId];
+                }
+            
+            }
         }else{
             tap = @"foreground";
             
@@ -511,11 +721,6 @@ didDisconnectWithUser:(GIDGoogleUser *)user
     }
 }
 
-// Receive data message on iOS 10 devices.
-- (void)applicationReceivedRemoteMessage:(FIRMessagingRemoteMessage *)remoteMessage {
-    // Print full message
-    [FirebasePlugin.firebasePlugin _logInfo:[NSString stringWithFormat:@"applicationReceivedRemoteMessage: %@", [remoteMessage appData]]];
-}
 
 // Apple Sign In
 - (void)authorizationController:(ASAuthorizationController *)controller
