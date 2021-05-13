@@ -17,12 +17,29 @@ import android.text.TextUtils;
 import android.content.ContentResolver;
 import android.graphics.Color;
 
+
+import com.android.volley.Request;
+import com.android.volley.VolleyLog;
+import com.android.volley.toolbox.JsonObjectRequest;
 import com.google.firebase.crashlytics.FirebaseCrashlytics;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
+import java.io.UnsupportedEncodingException;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+
+import  com.android.volley.AuthFailureError;
+import com.android.volley.DefaultRetryPolicy;
+import com.android.volley.RequestQueue;
+import com.android.volley.Response;
+import com.android.volley.VolleyError;
+import com.android.volley.toolbox.StringRequest;
+import com.android.volley.toolbox.Volley;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class FirebasePluginMessagingService extends FirebaseMessagingService {
 
@@ -39,16 +56,53 @@ public class FirebasePluginMessagingService extends FirebaseMessagingService {
      */
     @Override
     public void onNewToken(String refreshedToken) {
-        try{
+        try {
             super.onNewToken(refreshedToken);
             Log.d(TAG, "Refreshed token: " + refreshedToken);
             FirebasePlugin.sendToken(refreshedToken);
-        }catch (Exception e){
+        } catch (Exception e) {
             FirebasePlugin.handleExceptionWithoutContext(e);
         }
     }
 
+    private void LogMessageReceived( String customerId, String message, String webSiteUrl, String AuditLogId) {
+        /* TODO: parametrize url, add url to notification data? Read assest json file for url? */
+        RequestQueue queue = Volley.newRequestQueue(this.getApplicationContext());
+        JSONObject jsonBody = new JSONObject();
+        try {
+            jsonBody.put("Customerid", customerId);
+            jsonBody.put("Message", message);
+            jsonBody.put("isIos",false);
+            jsonBody.put("AuditLogId",AuditLogId);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
 
+        final String requestBody = jsonBody.toString();
+        JsonObjectRequest msonRequest = new JsonObjectRequest(Request.Method.POST,
+                webSiteUrl, jsonBody , new Response.Listener<JSONObject>() {
+
+            @Override
+            public void onResponse(JSONObject jObj) {
+                Log.d(TAG, "LogMessageReceived response: " + jObj.toString());
+            }
+        }, new Response.ErrorListener() {
+
+            @Override
+            public void onErrorResponse(VolleyError error) {
+                FirebasePlugin.handleExceptionWithoutContext(error);
+            }
+        });
+
+        //Set a retry policy in case of SocketTimeout & ConnectionTimeout Exceptions.
+        //Volley does retry for you if you have specified the policy.
+        msonRequest.setRetryPolicy(new DefaultRetryPolicy(50000,
+                3,
+                DefaultRetryPolicy.DEFAULT_BACKOFF_MULT));
+        // add the request to the request queue.
+        queue.add(msonRequest);
+
+}
     /**
      * Called when message is received.
      * Called IF message is a data message (i.e. NOT sent from Firebase console)
@@ -60,7 +114,7 @@ public class FirebasePluginMessagingService extends FirebaseMessagingService {
      */
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
-        try{
+        try {
             // [START_EXCLUDE]
             // There are two types of messages data messages and notification messages. Data messages are handled
             // here in onMessageReceived whether the app is in the foreground or background. Data messages are the type
@@ -99,7 +153,10 @@ public class FirebasePluginMessagingService extends FirebaseMessagingService {
             String visibility = null;
             String priority = null;
             boolean foregroundNotification = false;
-
+            String customerId = null;
+            String websiteUrl = null;
+            String fcmToken = null;
+            String AuditLogId = null;
             Map<String, String> data = remoteMessage.getData();
 
             if (remoteMessage.getNotification() != null) {
@@ -137,6 +194,10 @@ public class FirebasePluginMessagingService extends FirebaseMessagingService {
                 if(data.containsKey("notification_android_icon")) icon = data.get("notification_android_icon");
                 if(data.containsKey("notification_android_visibility")) visibility = data.get("notification_android_visibility");
                 if(data.containsKey("notification_android_priority")) priority = data.get("notification_android_priority");
+                if(data.containsKey("CustomerID")) customerId = data.get("CustomerID");
+                if(data.containsKey("websiteUrl")) websiteUrl = data.get("websiteUrl");
+                if(data.containsKey("AuditLogId")) AuditLogId = data.get("AuditLogId");
+                LogMessageReceived(customerId,body, websiteUrl, AuditLogId);
             }
 
             if (TextUtils.isEmpty(id)) {
@@ -158,9 +219,9 @@ public class FirebasePluginMessagingService extends FirebaseMessagingService {
             Log.d(TAG, "Visibility: " + visibility);
             Log.d(TAG, "Priority: " + priority);
 
-
             if (!TextUtils.isEmpty(body) || !TextUtils.isEmpty(title) || (data != null && !data.isEmpty())) {
                 boolean showNotification = (FirebasePlugin.inBackground() || !FirebasePlugin.hasNotificationsCallback() || foregroundNotification) && (!TextUtils.isEmpty(body) || !TextUtils.isEmpty(title));
+
                 sendMessage(remoteMessage, data, messageType, id, title, body, showNotification, sound, vibrate, light, color, icon, channelId, priority, visibility);
             }
         }catch (Exception e){
